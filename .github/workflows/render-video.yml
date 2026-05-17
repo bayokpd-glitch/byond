@@ -3,10 +3,15 @@ name: Render Video
 on:
   workflow_dispatch:
     inputs:
-      num_workers:
-        description: 'Number of parallel workers (recommended: 10-20)'
+      release_tag:
+        description: 'Release tag (e.g. v1, v2, v3)'
         required: true
-        default: '10'
+        default: 'v1'
+        type: string
+      num_workers:
+        description: 'Number of parallel workers'
+        required: true
+        default: '6'
         type: string
       composition:
         description: 'Remotion composition ID'
@@ -19,36 +24,34 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.calc.outputs.matrix }}
-      total_frames: ${{ steps.calc.outputs.total_frames }}
+      zip_url: ${{ steps.find_zip.outputs.zip_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Download public assets
+      - name: Find zip in release ${{ inputs.release_tag }}
+        id: find_zip
         run: |
-          RELEASE_URL=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest \
+          ZIP_URL=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.release_tag }} \
             | grep "browser_download_url.*\.zip" \
-            | head -n 1 \
+            | head -1 \
             | cut -d '"' -f 4)
-          echo "Using release asset: $RELEASE_URL"
-          curl -L -o assets.zip "$RELEASE_URL"
+          if [ -z "$ZIP_URL" ]; then
+            echo "❌ No .zip found in release ${{ inputs.release_tag }}"
+            echo "Available assets:"
+            curl -s https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.release_tag }} \
+              | grep "browser_download_url" | cut -d '"' -f 4
+            exit 1
+          fi
+          echo "Found: $ZIP_URL"
+          echo "zip_url=$ZIP_URL" >> $GITHUB_OUTPUT
+      - name: Download and extract
+        run: |
+          curl -L -o assets.zip "${{ steps.find_zip.outputs.zip_url }}"
           unzip -o assets.zip -d public/
-      - name: Cache public assets
-        uses: actions/cache@v4
+          ls -la public/
+      - uses: actions/setup-node@v4
         with:
-          path: public/
-          key: public-assets-${{ github.run_id }}
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-24-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-24-
-      - name: Install dependencies
-        run: npm ci
+          node-version: 20
+      - run: npm ci
       - name: Calculate frame ranges
         id: calc
         run: |
@@ -76,32 +79,13 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-      - name: Restore public assets cache
-        uses: actions/cache@v4
-        with:
-          path: public/
-          key: public-assets-${{ github.run_id }}
-      - name: Download public assets (fallback if cache miss)
+      - name: Download assets
         run: |
-          if [ ! -f public/scenes.json ]; then
-            RELEASE_URL=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest \
-              | grep "browser_download_url.*\.zip" \
-              | head -n 1 \
-              | cut -d '"' -f 4)
-            echo "Using release asset: $RELEASE_URL"
-            curl -L -o assets.zip "$RELEASE_URL"
-            unzip -o assets.zip -d public/
-          fi
+          curl -L -o assets.zip "${{ needs.setup.outputs.zip_url }}"
+          unzip -o assets.zip -d public/
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-24-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-24-
+          node-version: 20
       - run: npm ci
       - name: Ensure Chrome
         run: npx remotion browser ensure
@@ -112,7 +96,7 @@ jobs:
             --concurrency=2 --image-format=jpeg --video-bitrate=8M --codec=h264 --overwrite
       - uses: actions/upload-artifact@v4
         with:
-          name: chunk-${{ matrix.chunk.index }}
+          name: chunk-${{ inputs.release_tag }}-${{ matrix.chunk.index }}
           path: chunk_${{ matrix.chunk.index }}.mp4
           retention-days: 1
 
@@ -122,7 +106,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: chunk-*
+          pattern: chunk-${{ inputs.release_tag }}-*
           path: chunks/
       - name: Stitch
         run: |
@@ -134,6 +118,6 @@ jobs:
           echo "Size: $(du -h output.mp4 | cut -f1)"
       - uses: actions/upload-artifact@v4
         with:
-          name: rendered-video
+          name: video-${{ inputs.release_tag }}
           path: output.mp4
           retention-days: 7
