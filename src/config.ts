@@ -6,8 +6,8 @@
  */
 export const CONFIG = {
   // -------- Channel branding (top-left during image scenes) --------
-  channelName: "Uncover Truth",
-  channelTagline: "Your Daily Briefing on World News",
+  channelName: "Beyond the Headline",
+  channelTagline: "The Daily Brief",
 
   // -------- Background video (image scenes only) --------
   useBackgroundVideo: true,
